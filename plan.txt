@@ -1,0 +1,6 @@
+phase 1: Build steamlit UI and create sample datasets
+Phase 2: Train and integrate the fraud and identity models
+Phase 3: Add document ingestion, embeddings, chroma DB and RAG pipeline
+Phase 4: Connect to LLM API and implement conversational assistant
+Phase 5: Integrate Trulens to evaluate answer quality and retrival performance
+Phase 6: Add FastAPI endpoints and Dockerize the application
