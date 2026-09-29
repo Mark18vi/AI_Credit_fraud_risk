@@ -4,6 +4,9 @@ import os
 from ml.fraud_model import predict_fraud
 from ml.credit_model import predict_credit_risk
 from ml.identity_model import analyze_identity_risk
+from rag.rag_pipeline import get_relevant_context
+from rag.llm import generate_answer
+from evaluation.trulens_eval import evaluate_rag_response, get_evaluation_report
 
 # Page Configuration
 st.set_page_config(
@@ -27,13 +30,48 @@ if page == "Dashboard":
     This platform integrates RAG-based document intelligence and ML-based predictive analytics to help analysts investigate financial crimes.
     """)
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Documents", "4", "PDFs")
-    with col2:
-        st.metric("ML Models", "3", "Active")
-    with col3:
-        st.metric("Avg Retrieval Accuracy", "92%", "+2%")
+    # Document Upload Section
+    st.subheader("📄 Knowledge Base Management")
+    uploaded_pdfs = st.file_uploader("Upload Policy Documents (PDF)", type="pdf", accept_multiple_files=True)
+    
+    if uploaded_pdfs:
+        if st.button("Process and Index Documents"):
+            with st.spinner("Ingesting documents into ChromaDB..."):
+                try:
+                    # Save uploaded files to the documents folder first
+                    for pdf in uploaded_pdfs:
+                        with open(os.path.join('documents', pdf.name), "wb") as f:
+                            f.write(pdf.getbuffer())
+                    
+                    # Run the ingestion pipeline
+                    from ingestion.pipeline import run_ingestion_pipeline
+                    run_ingestion_pipeline()
+                    
+                    st.success(f"Successfully indexed {len(uploaded_pdfs)} documents!")
+                except Exception as e:
+                    st.error(f"Ingestion Error: {e}")
+
+    st.divider()
+    
+    # Dynamic Metrics from CSVs
+    try:
+        fraud_df = pd.read_csv('data/fraud.csv')
+        credit_df = pd.read_csv('data/credit.csv')
+        identity_df = pd.read_csv('data/identity.csv')
+        
+        # Count PDFs in documents folder
+        doc_count = len([f for f in os.listdir('documents') if f.endswith('.pdf')])
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Documents", doc_count, "PDFs")
+        with col2:
+            st.metric("Total Transactions", len(fraud_df), "Records")
+        with col3:
+            st.metric("High Risk Apps", len(credit_df[credit_df['risk_level'] == 'High Risk']), "Applicants")
+    except Exception as e:
+        st.error(f"Could not load metrics: {e}")
+        st.info("Please ensure datasets exist in the data/ folder.")
 
     st.divider()
     st.subheader("Quick Access")
@@ -59,10 +97,37 @@ elif page == "Chat Assistant":
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            # Placeholder for RAG logic (Phase 3 & 4)
-            response = f"This is a placeholder response. In Phase 3/4, I will retrieve context from ChromaDB and generate an answer for: '{prompt}'"
-            st.markdown(response)
-            st.caption("Sources: [Fraud_Policy.pdf, Page 2] | Similarity Score: 0.89")
+            with st.spinner("Searching documents and generating answer..."):
+                try:
+                    # 1. Retrieve context from ChromaDB
+                    context, docs = get_relevant_context(prompt)
+                    
+                    # 2. Generate answer using LLM
+                    response = generate_answer(prompt, context)
+                    
+                    # 3. Evaluate the response using TruLens logic
+                    scores = evaluate_rag_response(prompt, context, response)
+                    
+                    # 4. Display response
+                    st.markdown(response)
+                    
+                    # 5. Display Evaluation Metrics
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Groundedness", f"{scores['groundedness']:.2f}")
+                    col2.metric("Ans Relevance", f"{scores['answer_relevance']:.2f}")
+                    col3.metric("Ctx Relevance", f"{scores['context_relevance']:.2f}")
+                    
+                    # 6. Display sources
+                    if docs:
+                        with st.expander("View Sources"):
+                            for i, doc in enumerate(docs):
+                                source = doc.metadata.get('source', 'Unknown')
+                                page = doc.metadata.get('page', 'Unknown')
+                                st.write(f"Source {i+1}: {os.path.basename(source)} (Page {page})")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    response = "I'm sorry, I encountered an error while retrieving the answer. Please ensure the API key is configured."
+                    st.markdown(response)
         
         st.session_state.messages.append({"role": "assistant", "content": response})
 
@@ -152,13 +217,27 @@ elif page == "Credit Risk":
 # --- Identity Analytics Page ---
 elif page == "Identity Analytics":
     st.title("🆔 Identity Risk Analytics")
-    st.markdown("Upload user activity logs to detect identity anomalies.")
+    st.markdown("Analyze user activity logs to detect identity anomalies.")
     
-    uploaded_file = st.file_uploader("Upload User Activity CSV", type="csv")
+    # Dynamic Option: Load existing dataset or upload new one
+    load_option = st.radio("Data Source", ["Use Default Dataset", "Upload New CSV"])
     
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        st.write("### Preview of Uploaded Data")
+    if load_option == "Use Default Dataset":
+        try:
+            df = pd.read_csv('data/identity.csv')
+            st.success("Loaded default identity dataset.")
+        except Exception as e:
+            st.error(f"Default dataset not found: {e}")
+            df = None
+    else:
+        uploaded_file = st.file_uploader("Upload User Activity CSV", type="csv")
+        if uploaded_file is not None:
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = None
+
+    if df is not None:
+        st.write("### Preview of Data")
         st.dataframe(df.head())
         
         if st.button("Analyze Identity Risk"):
@@ -178,23 +257,23 @@ elif page == "Identity Analytics":
             
             st.write("### Normal Records")
             st.dataframe(normal_df)
-    else:
-        st.info("Please upload a CSV file to begin analysis. You can use `data/identity.csv` for testing.")
+    elif load_option == "Upload New CSV":
+        st.info("Please upload a CSV file to begin analysis.")
 
 # --- Evaluation Page ---
 elif page == "Evaluation":
     st.title("📊 TruLens Evaluation Dashboard")
     st.markdown("Monitor the performance of the RAG pipeline using TruLens metrics.")
     
-    st.info("Evaluation data will be populated after implementing the RAG pipeline in Phase 3.")
+    st.info("The dashboard now displays real-time evaluation metrics for each query in the chat assistant.")
     
-    # Mock evaluation table
-    eval_data = {
-        "Question": ["What is AML?", "How to handle fraud?", "KYC Process?"],
-        "Answer": ["Anti-Money Laundering...", "Report to...", "Identify customer..."],
-        "Groundedness": [0.91, 0.85, 0.98],
-        "Context Relevance": [0.95, 0.88, 0.92],
-        "Answer Relevance": [0.89, 0.91, 0.94],
-        "Latency (s)": [1.2, 1.5, 1.1]
-    }
-    st.table(pd.DataFrame(eval_data))
+    st.subheader("Historical Performance Report")
+    report_df = get_evaluation_report()
+    st.table(report_df)
+    
+    st.markdown("""
+    ### Metric Definitions:
+    - **Groundedness**: Does the answer only use information present in the retrieved context? (Prevents Hallucinations)
+    - **Answer Relevance**: Does the answer actually solve the user's query?
+    - **Context Relevance**: Was the retrieved context actually helpful in answering the question?
+    """)

@@ -1,2 +1,16 @@
-streamlit
+﻿streamlit
 pandas
+numpy
+scikit-learn
+joblib
+fastapi
+uvicorn
+pydantic
+langchain
+langchain-community
+langchain-openai
+chromadb
+pypdf
+trulens_eval
+langchain-embeddings
+langchain-chroma
